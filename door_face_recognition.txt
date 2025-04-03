@@ -1,0 +1,105 @@
+#!/usr/bin/python
+import RPi.GPIO as GPIO
+import time
+import cv2
+import mediapipe as mp
+
+# Configuration des broches GPIO
+GPIO.setmode(GPIO.BCM)  # Utilisation du mode BCM
+
+# Configuration des broches pour le moteur
+GPIO.setup(17, GPIO.OUT)  # Broche pour PWM
+GPIO.setup(27, GPIO.OUT)  # Broche pour la direction (gauche/droite)
+GPIO.setup(22, GPIO.OUT)  # Broche pour la direction (gauche/droite)
+
+# Demander Ã  l'utilisateur de dÃ©finir le cycle de travail et la frÃ©quence
+dc_open = 100  # Duty cycle for opening (fast speed)
+dc_close = 30   # Duty cycle for closing (slow speed)
+hz = 500        # PWM frequency
+
+# CrÃ©er un objet PWM pour contrÃ´ler la vitesse du moteur via la broche 17
+pwm = GPIO.PWM(17, hz)
+
+# Initialiser MediaPipe pour la dÃ©tection de visage
+mp_face_detection = mp.solutions.face_detection
+mp_drawing = mp.solutions.drawing_utils
+face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.2)
+
+# Initialiser la camÃ©ra
+cap = cv2.VideoCapture(1)  # Ouvre la camÃ©ra par dÃ©faut
+
+try:
+    # DÃ©marrer le contrÃ´le PWM
+    pwm.start(0)  # DÃ©marrer le PWM avec un cycle de travail de 0% (moteur arrÃªtÃ©)
+    print(f"Moteur en fonctionnement avec une frÃ©quence de {hz} Hz.")
+
+    while True:
+        # Lire une image depuis la camÃ©ra
+        ret, frame = cap.read()
+
+        # Convertir l'image en RGB (MediaPipe fonctionne avec RGB)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # DÃ©tection des visages
+        results = face_detection.process(rgb_frame)
+
+        if results.detections:
+            # Un visage est dÃ©tectÃ©
+            print("Visage dÃ©tectÃ©!")
+
+            # Ouvrir la porte rapidement (vitesse Ã©levÃ©e)
+            pwm.ChangeDutyCycle(dc_open)  # 100% duty cycle pour une vitesse maximale
+            GPIO.output(27, GPIO.LOW)
+            GPIO.output(22, GPIO.HIGH)
+            print("Porte en ouverture...")
+            time.sleep(2)  # Temps pour ouvrir complÃ¨tement la porte
+
+            # ArrÃªter le moteur
+            pwm.ChangeDutyCycle(0)  # 0% duty cycle pour arrÃªter le moteur
+            GPIO.output(27, GPIO.LOW)
+            GPIO.output(22, GPIO.LOW)
+            print("Porte ouverte. Attente de 3 secondes...")
+            time.sleep(3)  # Garder la porte ouverte pendant 3 secondes
+
+            # Fermer la porte lentement (vitesse rÃ©duite)
+            pwm.ChangeDutyCycle(dc_close)  # 30% duty cycle pour une vitesse lente
+            GPIO.output(27, GPIO.HIGH)  # Sens inverse
+            GPIO.output(22, GPIO.LOW)   # Sens inverse
+            print("Porte en fermeture lente...")
+            time.sleep(4)  # Temps pour fermer complÃ¨tement la porte
+
+            # ArrÃªter le moteur
+            pwm.ChangeDutyCycle(0)  # 0% duty cycle pour arrÃªter le moteur
+            GPIO.output(27, GPIO.LOW)
+            GPIO.output(22, GPIO.LOW)
+            print("Porte fermÃ©e.")
+
+        else:
+            # Aucun visage dÃ©tectÃ©
+            print("Aucun visage dÃ©tectÃ©.")
+            time.sleep(1)  # Attendre avant de vÃ©rifier Ã  nouveau
+
+        # Afficher l'image avec les visages dÃ©tectÃ©s (optionnel, pour voir le rÃ©sultat)
+        if results.detections:
+            for detection in results.detections:
+                mp_drawing.draw_detection(frame, detection)
+
+        # Affichage de l'image
+        cv2.imshow("Face Detection", frame)
+
+        # Quitter si la touche 'q' est pressÃ©e
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("Touche 'q' pressÃ©e. ArrÃªt du programme...")
+            break
+
+except KeyboardInterrupt:
+    # ArrÃªter le PWM et nettoyer les broches GPIO Ã  l'arrÃªt du programme
+    pwm.stop()
+    print("\nMoteur arrÃªtÃ©.")
+
+finally:
+    # Nettoyer les broches GPIO Ã  la fin du programme
+    GPIO.cleanup()
+    cap.release()  # LibÃ©rer la camÃ©ra
+    cv2.destroyAllWindows()  # Fermer toutes les fenÃªtres OpenCV
+    print("GPIO nettoyÃ©.")

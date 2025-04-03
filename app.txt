@@ -1,0 +1,179 @@
+import sys
+import requests
+from PyQt5.QtWidgets import (
+    QApplication, QLabel, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QTableWidget, QTableWidgetItem, QHeaderView
+)
+from PyQt5.QtGui import QImage, QPixmap, QFont, QIcon
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
+import cv2
+import numpy as np
+
+# Custom styles for the app
+APP_STYLE = """
+    QWidget {
+        background-color: #F5F5F5;
+        color: #333333;
+    }
+    QLabel {
+        font-size: 18px;
+        font-weight: bold;
+    }
+    QPushButton {
+        background-color: #2196F3;  /* Blue */
+        color: white;
+        border: 2px solid #1976D2;  /* Darker blue */
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 16px;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #1976D2;  /* Darker blue */
+    }
+    QPushButton:pressed {
+        background-color: #0D47A1;  /* Even darker blue */
+    }
+    QFrame {
+        background-color: #FFFFFF;
+        border-radius: 15px;
+        padding: 10px;
+        border: 1px solid #DDDDDD;
+    }
+    QTableWidget {
+        background-color: #FFFFFF;
+        border: 1px solid #DDDDDD;
+        border-radius: 10px;
+        font-size: 14px;
+    }
+    QTableWidget::item {
+        padding: 10px;
+    }
+    QHeaderView::section {
+        background-color: #2196F3;  /* Blue */
+        color: white;
+        padding: 10px;
+        font-size: 16px;
+        font-weight: bold;
+    }
+"""
+
+class VideoThread(QThread):
+    change_pixmap_signal = pyqtSignal(np.ndarray)  # Signal to emit frame
+
+    def __init__(self, ip):
+        super().__init__()
+        self.ip = ip
+
+    def run(self):
+        url = f'http://{self.ip}:5000/video_feed'
+        cap = cv2.VideoCapture(url)
+        while True:
+            ret, frame = cap.read()
+            if ret:
+                self.change_pixmap_signal.emit(frame)
+            else:
+                break
+
+class App(QWidget):
+    def __init__(self, ip):
+        super().__init__()
+        self.ip = ip
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('Smart Fridge - Food Detection')
+        self.setGeometry(100, 100, 1200, 800)
+        self.setStyleSheet(APP_STYLE)
+
+        # Main layout
+        main_layout = QVBoxLayout()
+
+        # Title at the top
+        title_label = QLabel('Smart Fridge', self)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #2196F3; padding: 20px;")  # Blue
+        main_layout.addWidget(title_label)
+
+        # Horizontal layout for camera feed and controls
+        content_layout = QHBoxLayout()
+
+        # Left side: Camera feed
+        left_frame = QFrame()
+        left_frame.setStyleSheet("QFrame { background-color: #FFFFFF; }")
+        left_layout = QVBoxLayout()
+
+        # Camera feed label
+        self.camera_label = QLabel(self)
+        self.camera_label.setAlignment(Qt.AlignCenter)
+        left_layout.addWidget(self.camera_label)
+
+        left_frame.setLayout(left_layout)
+        content_layout.addWidget(left_frame, 50)  # 50% width for the camera feed
+
+        # Right side: Detection and recipe
+        right_frame = QFrame()
+        right_frame.setStyleSheet("QFrame { background-color: #FFFFFF; }")
+        right_layout = QVBoxLayout()
+
+        # Detected foods table
+        self.detected_foods_table = QTableWidget(self)
+        self.detected_foods_table.setColumnCount(2)
+        self.detected_foods_table.setHorizontalHeaderLabels(['Food Item', 'Quantity'])
+        self.detected_foods_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.detected_foods_table.setStyleSheet("QTableWidget { font-size: 16px; }")
+        right_layout.addWidget(self.detected_foods_table)
+
+        # Recipe label
+        self.recipe_label = QLabel('Recipe: None', self)
+        self.recipe_label.setAlignment(Qt.AlignCenter)
+        self.recipe_label.setStyleSheet("font-size: 18px; color: #2196F3; padding: 10px;")  # Blue
+        right_layout.addWidget(self.recipe_label)
+
+        # Detect food button
+        self.detect_button = QPushButton('Detect Food', self)
+        self.detect_button.setIcon(QIcon('detect_icon.png'))  # Add an icon for the button
+        self.detect_button.clicked.connect(self.detect_food)
+        right_layout.addWidget(self.detect_button)
+
+        right_frame.setLayout(right_layout)
+        content_layout.addWidget(right_frame, 50)  # 50% width for the detection and recipe
+
+        main_layout.addLayout(content_layout)
+        self.setLayout(main_layout)
+
+        # Start video thread for the camera
+        self.video_thread = VideoThread(self.ip)
+        self.video_thread.change_pixmap_signal.connect(self.update_image)
+        self.video_thread.start()
+
+    def update_image(self, frame):
+        """Update the camera feed."""
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        convert_to_Qt_format = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self.camera_label.setPixmap(QPixmap.fromImage(convert_to_Qt_format).scaled(600, 400, Qt.KeepAspectRatio))
+
+    def detect_food(self):
+        """Trigger food detection and update the table and recipe."""
+        response = requests.get(f'http://{self.ip}:5000/detect')
+        if response.status_code == 200:
+            data = response.json()
+            detected_foods = data.get('detected_foods', {})
+            recipe = data.get('recipe', 'No recipe found')
+
+            # Update the detected foods table
+            self.detected_foods_table.setRowCount(len(detected_foods))
+            for row, (food, quantity) in enumerate(detected_foods.items()):
+                self.detected_foods_table.setItem(row, 0, QTableWidgetItem(food))
+                self.detected_foods_table.setItem(row, 1, QTableWidgetItem(str(quantity)))
+
+            # Update the recipe label
+            self.recipe_label.setText(f'Recipe: {recipe}')
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ip = '192.168.114.178'  # Replace with your Raspberry Pi's IP address
+    ex = App(ip)
+    ex.show()
+    sys.exit(app.exec_())
